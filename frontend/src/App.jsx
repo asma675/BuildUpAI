@@ -704,12 +704,14 @@ const AddCoursePage = ({ db, userId }) => {
             <div className="flex-1">
                 <div className="flex items-center justify-between mb-4">
                     <h2 className="text-3xl font-bold">Courses</h2>
-                    <button
-                        onClick={handleOpenAdd}
-                        className="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-blue-700"
-                    >
-                        + Add Course
-                    </button>
+                    {!isDrawerOpen && (
+                        <button
+                            onClick={handleOpenAdd}
+                            className="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-blue-700"
+                        >
+                            + Add Course
+                        </button>
+                    )}
                 </div>
 
                 {listError && <p className="text-red-600 mb-3">{listError}</p>}
