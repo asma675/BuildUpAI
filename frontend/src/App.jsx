@@ -152,6 +152,28 @@ const analyzeResumeWithGemini = async (db, userId, resumeText, careerGoal) => {
   }
 };
 
+const uploadResumeFile = async (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch('/api/upload-resume', {
+    method: 'POST',
+    body: formData
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Upload failed (${response.status}): ${message}`);
+  }
+
+  const result = await response.json();
+  if (!result.extractedText) {
+    throw new Error('Resume text was empty in the upload response.');
+  }
+
+  return result;
+};
+
 // --- Component Helpers ---
 
 const IconCard = ({ icon: Icon, title, children, className = "" }) => (
@@ -188,6 +210,9 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
   const [careerGoal, setCareerGoal] = useState('Software Engineer (Full-Stack)');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState(null);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState(null);
 
   const careerGoals = [
     'Software Engineer (Full-Stack)',
@@ -198,6 +223,25 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
     'Marketing Manager (Digital)',
     'Mechanical Engineer',
   ];
+
+  const handleUploadFile = async () => {
+    if (!selectedFile) {
+      setUploadError('Please choose a file first.');
+      return;
+    }
+
+    setUploadError(null);
+    setIsUploading(true);
+    try {
+      const { extractedText } = await uploadResumeFile(selectedFile);
+      setResumeText(extractedText);
+      setError(null);
+    } catch (e) {
+      setUploadError(e.message);
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   const handleAnalyze = async () => {
     if (resumeText.length < 50) {
@@ -226,6 +270,46 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
         {/* Input Card */}
         <IconCard icon={UploadCloud} title="Resume Content" className="lg:col-span-1">
           <p className="text-sm text-gray-500 mb-2">Paste your resume text here (PDF upload simulated).</p>
+          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:space-x-3 space-y-2 sm:space-y-0 mb-3">
+            <input
+              type="file"
+              accept=".pdf,.doc,.docx,.txt"
+              className="text-sm text-gray-700 flex-1 min-w-0"
+              onChange={(e) => {
+                setSelectedFile(e.target.files?.[0] || null);
+                setUploadError(null);
+              }}
+              disabled={isAnalyzing || isUploading}
+            />
+            <button
+              type="button"
+              onClick={handleUploadFile}
+              className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-3 py-2 rounded-lg shadow disabled:opacity-60 flex items-center justify-center"
+              disabled={!selectedFile || isUploading || isAnalyzing}
+            >
+              {isUploading ? (
+                <>
+                  <Loader className="w-4 h-4 mr-2 animate-spin" />
+                  Extracting...
+                </>
+              ) : (
+                'Extract text'
+              )}
+            </button>
+          </div>
+          {selectedFile?.name && (
+            <div
+              className="text-xs text-gray-500 truncate max-w-full mb-2"
+              title={selectedFile.name}
+            >
+              Selected file: {selectedFile.name}
+            </div>
+          )}
+          {uploadError && (
+            <div className="p-2 mb-3 text-red-700 bg-red-100 border border-red-200 rounded-lg text-xs font-medium">
+              {uploadError}
+            </div>
+          )}
           <textarea
             className="w-full h-64 p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 font-mono text-sm shadow-inner"
             placeholder="Start by pasting your full resume content (experience, education, skills, projects)..."
@@ -272,7 +356,7 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
             <button
               onClick={handleAnalyze}
               className="bg-green-600 hover:bg-green-700 transition-colors text-white font-bold px-6 py-3 rounded-xl w-full shadow-md disabled:opacity-50 flex items-center justify-center transform hover:scale-[1.01]"
-              disabled={isAnalyzing || resumeText.length < 50}
+              disabled={isAnalyzing || isUploading || resumeText.length < 50}
             >
               {isAnalyzing ? (
                 <>
