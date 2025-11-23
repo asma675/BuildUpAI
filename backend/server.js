@@ -1,137 +1,120 @@
 const express = require('express');
 const cors = require('cors');
-const axios = require('axios');
 const dotenv = require('dotenv');
 const multer = require('multer');
-const fs = require('fs');
 const path = require('path');
+const fs = require('fs');
 
+const GeminiClient = require('./services/geminiClient');
+const ANALYSIS_SCHEMA = require('./constants/analysisSchema');
+const LEARNING_SCHEMA = require('./constants/learningSchema');
+const RECOMMENDATIONS_DB = require('./data/recommendations');
+const { cleanupFile } = require('./utils/fileUtils');
+const VertexCourseSearch = require('./services/vertexSearch');
 
 dotenv.config();
+
+// --- Config & Constants ---
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-preview-09-2025';
+const GCP_PROJECT = process.env.GCP_PROJECT;
+const GCP_LOCATION = process.env.GCP_LOCATION || 'us-central1';
+const VERTEX_DATA_STORE_ID = process.env.VERTEX_DATA_STORE_ID;
+const VERTEX_API_KEY = process.env.VERTEX_API_KEY;
 
 if (!GEMINI_API_KEY) {
   console.warn('Warning: GEMINI_API_KEY is not set. The /api/analyze endpoint will fail until you add it to your .env file.');
 }
 
-app.use(cors());
-app.use(express.json({ limit: '2mb' }));
-
-// Ensure upload directory exists and configure multer storage
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, UPLOAD_DIR);
-  },
-  filename: function (req, file, cb) {
-    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, `${unique}-${file.originalname}`);
-  }
+const mapStaticRecommendationsToLearning = () => ({
+  courses: (RECOMMENDATIONS_DB.certifications || []).map((c) => ({
+    title: c.name,
+    provider: c.provider || 'Static Catalog',
+    link: c.link,
+    cost: c.cost,
+    duration: c.length,
+    level: ''
+  })),
+  opportunities: (RECOMMENDATIONS_DB.opportunities || []).map((o) => ({
+    name: o.name,
+    description: o.description,
+    link: o.link,
+    difficulty: o.difficulty
+  }))
 });
 
-const upload = multer({ storage });
-
-// Define the structured JSON schema for the AI output
-const ANALYSIS_SCHEMA = {
-  type: "OBJECT",
-  properties: {
-    "resumeScore": { "type": "INTEGER", "description": "The resume score out of 100, focusing on the career goal." },
-    "missingSkills": {
-      "type": "ARRAY",
-      "items": { "type": "STRING" },
-      "description": "3 crucial skills missing for the target role, grounded in current industry needs."
-    },
-    "recommendations": {
-      "type": "OBJECT",
-      "properties": {
-        "certifications": {
-          "type": "ARRAY",
-          "items": { "type": "STRING" },
-          "description": "3 highly relevant certifications or courses (e.g., Coursera, AWS, Google) to bridge the skill gap."
-        },
-        "opportunities": {
-          "type": "ARRAY",
-          "items": { "type": "STRING" },
-          "description": "3 real-world opportunities (e.g., hackathons, open-source projects, specialized internships) to gain experience."
-        }
-      }
-    },
-    "summary": { "type": "STRING", "description": "A concise, 3-sentence summary of the resume's strengths and weaknesses against the career goal." }
-  },
-  required: ["resumeScore", "missingSkills", "recommendations", "summary"]
+const logError = (context, error) => {
+  const details = error?.response?.data || error.message || error;
+  console.error(`[${context}] error:`, details);
 };
 
-async function generateStructuredAnalysis(resumeText, careerGoal) {
-  if (!resumeText || !careerGoal) {
-    throw new Error('resumeText and careerGoal are required for analysis.');
-  }
+const ALLOWED_DOMAINS = [
+  'coursera.org',
+  'udemy.com',
+  'grow.google',
+  'google.com',
+  'skillbuilder.aws',
+  'aws.amazon.com',
+  'edx.org',
+  'linkedin.com',
+  'kaggle.com',
+  'mlh.io',
+  'hackthebox.com'
+];
 
-  if (!GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY is not configured on the server.');
-  }
-
-  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-
-  const systemPrompt = `You are a world-class AI Career Coach named CareerLift AI. Your task is to analyze a student's resume against their specified career goal. You must generate a score (out of 100), identify 3 crucial missing skills, and suggest 3 real-world opportunities and 3 certifications, all based on current industry standards and the user's career goal. Respond ONLY with a valid JSON object matching the provided schema.`;
-
-  const truncatedResume = resumeText.substring(0, 5000);
-
-  const userQuery = `Analyze the following resume content for the career goal: "${careerGoal}". Resume content: "${truncatedResume}".`;
-
-  const payload = {
-    contents: [{ parts: [{ text: userQuery }] }],
-    systemInstruction: { parts: [{ text: systemPrompt }] },
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: ANALYSIS_SCHEMA,
-    }
-  };
-
-  const response = await axios.post(apiUrl, payload, {
-    headers: { 'Content-Type': 'application/json' },
-    timeout: 60000
-  });
-
-  const result = response.data;
-  const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-  if (!text) {
-    throw new Error('Gemini response was empty or malformed.');
-  }
-
-  let analysisResult;
+const isAllowedDomain = (url) => {
   try {
-    analysisResult = JSON.parse(text);
-  } catch (parseError) {
-    throw new Error('Failed to parse Gemini JSON response.');
+    const host = new URL(url).host;
+    return ALLOWED_DOMAINS.some((d) => host.endsWith(d));
+  } catch {
+    return false;
   }
+};
 
-  // Extract grounding sources
-  let sources = [];
-  const groundingMetadata = result.candidates?.[0]?.groundingMetadata;
-  if (groundingMetadata && groundingMetadata.groundingAttributions) {
-    sources = groundingMetadata.groundingAttributions
-      .map((attr) => ({
-        uri: attr.web?.uri,
-        title: attr.web?.title
-      }))
-      .filter((source) => source.uri && source.title);
-  }
+const chooseLink = (candidateLink, sources = []) => {
+  if (candidateLink && isAllowedDomain(candidateLink)) return candidateLink;
+  const fromSources = sources.find((s) => s?.uri && isAllowedDomain(s.uri));
+  return fromSources ? fromSources.uri : null;
+};
 
-  return {
-    ...analysisResult,
-    timestamp: new Date().toISOString(),
-    careerGoal,
-    sources
-  };
-}
+// --- Middleware ---
+
+app.use(cors());
+app.use(express.json({ limit: '2mb' }));
+
+const geminiClient = new GeminiClient({
+  apiKey: GEMINI_API_KEY,
+  model: GEMINI_MODEL,
+  schema: ANALYSIS_SCHEMA,
+  learningSchema: LEARNING_SCHEMA
+});
+const vertexSearch = new VertexCourseSearch({
+  projectId: GCP_PROJECT,
+  location: GCP_LOCATION,
+  dataStoreId: VERTEX_DATA_STORE_ID,
+  apiKey: VERTEX_API_KEY
+});
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: function (_req, _file, cb) {
+      cb(null, UPLOAD_DIR);
+    },
+    filename: function (_req, file, cb) {
+      const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+      cb(null, `${unique}-${file.originalname}`);
+    }
+  })
+});
+
+// --- Routes ---
 
 app.post('/api/analyze', async (req, res) => {
   try {
@@ -141,11 +124,12 @@ app.post('/api/analyze', async (req, res) => {
       return res.status(400).json({ error: 'resumeText and careerGoal are required.' });
     }
 
-    const analysisWithMetadata = await generateStructuredAnalysis(resumeText, careerGoal);
-
+    console.log(`[analyze] careerGoal="${careerGoal}" textLength=${resumeText.length}`);
+    const analysisWithMetadata = await geminiClient.generateStructuredAnalysis(resumeText, careerGoal);
+    console.log(`[analyze] success careerGoal="${careerGoal}" score=${analysisWithMetadata.resumeScore}`);
     return res.json(analysisWithMetadata);
   } catch (error) {
-    console.error('Error in /api/analyze:', error?.response?.data || error.message || error);
+    logError('analyze', error);
     return res.status(500).json({
       error: 'Failed to analyze resume with Gemini.',
       details: error?.response?.data || error.message
@@ -161,109 +145,187 @@ app.post('/api/upload-resume', upload.single('file'), async (req, res) => {
     }
 
     const { careerGoal } = req.body || {};
-
     filePath = req.file.path;
-    const fileBuffer = fs.readFileSync(filePath);
 
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-
-    const base64Data = fileBuffer.toString("base64");
-
-    const payload = {
-      contents: [
-        {
-          parts: [
-            {
-              inlineData: {
-                mimeType: req.file.mimetype,
-                data: base64Data
-              }
-            }
-          ]
-        }
-      ]
-    };
-
-    const response = await axios.post(apiUrl, payload, {
-      headers: { "Content-Type": "application/json" },
-      timeout: 60000
-    });
-
-    const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!text) {
-      return res.status(500).json({ error: "Failed to extract text from resume." });
-    }
+    console.log(`[upload-resume] file=${req.file.originalname} size=${req.file.size} careerGoal="${careerGoal || ''}"`);
+    const text = await geminiClient.extractTextFromFile(req.file);
 
     let analysis = null;
     if (careerGoal) {
-      analysis = await generateStructuredAnalysis(text, careerGoal);
+      console.log(`[upload-resume] running analysis for careerGoal="${careerGoal}"`);
+      analysis = await geminiClient.generateStructuredAnalysis(text, careerGoal);
     }
 
+    console.log(`[upload-resume] success file=${req.file.originalname} chars=${text.length}`);
     return res.json({
       extractedText: text,
       characterCount: text.length,
       analysis
     });
-
   } catch (error) {
-    console.error('Upload error:', error?.response?.data || error);
-
+    logError('upload-resume', error);
     return res.status(500).json({
       error: "Failed to process uploaded resume.",
       details: error?.response?.data || error.message
     });
   } finally {
-    if (filePath && fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
+    cleanupFile(filePath);
   }
 });
 
+app.post('/api/courses', async (req, res) => {
+  try {
+    const { role, skills } = req.body || {};
+
+    if (!role) {
+      return res.status(400).json({ error: 'role is required.' });
+    }
+
+    const skillsText = Array.isArray(skills) ? skills.join(', ') : (skills || '');
+
+    console.log(`[courses] role="${role}" skills="${skillsText}"`);
+    let courses = [];
+    let sources = [];
+    let usedVertex = false;
+
+    if (vertexSearch.isEnabled()) {
+      try {
+        courses = await vertexSearch.searchCourses({ query: role, skills: Array.isArray(skills) ? skills : [skillsText] });
+        usedVertex = true;
+        console.log(`[courses] vertex results=${courses.length}`);
+      } catch (err) {
+        logError('courses-vertex', err);
+      }
+    }
+
+    // If Vertex failed or returned nothing, fall back to Gemini + static sanitizer.
+    if (!courses.length) {
+      const discovery = await geminiClient.discoverLearningResources(role, skillsText);
+      const structured = await geminiClient.structureLearningResources(discovery.text, discovery.sources);
+
+      const sanitizedCourses = (structured.courses || [])
+        .map((c) => ({
+          ...c,
+          link: chooseLink(c.link, discovery.sources)
+        }))
+        .filter((c) => !!c.link);
+
+      courses = sanitizedCourses.length ? sanitizedCourses : mapStaticRecommendationsToLearning().courses;
+      sources = discovery.sources || [];
+    }
+
+    const opportunities = mapStaticRecommendationsToLearning().opportunities; // keep static for now
+
+    console.log(`[courses] success role="${role}" courses=${courses.length} opportunities=${opportunities.length} usedVertex=${usedVertex}`);
+    return res.json({
+      role,
+      skills: skillsText,
+      courses,
+      opportunities,
+      sources,
+      usedVertex,
+      fallback: !usedVertex && !sources.length
+    });
+  } catch (error) {
+    logError('courses', error);
+    const fallback = mapStaticRecommendationsToLearning();
+    console.log(`[courses] fallback served courses=${fallback.courses.length} opportunities=${fallback.opportunities.length}`);
+    return res.status(200).json({
+      role: req.body?.role,
+      skills: Array.isArray(req.body?.skills) ? req.body.skills.join(', ') : (req.body?.skills || ''),
+      courses: fallback.courses,
+      opportunities: fallback.opportunities,
+      sources: [],
+      fallback: true,
+      message: 'Live lookup failed; returning static catalog.'
+    });
+  }
+});
 
 app.get('/api/recommendations/details', (req, res) => {
   const { type } = req.query;
 
-  // This can be expanded or read from a JSON file
-  const DATABASE = {
-    certifications: [
-      {
-        name: "Google IT Support Certification",
-        cost: "$49/month",
-        length: "3–6 months",
-        link: "https://grow.google/certificates"
-      },
-      {
-        name: "AWS Cloud Practitioner",
-        cost: "$100",
-        length: "1–2 months",
-        link: "https://aws.amazon.com/certification/"
-      }
-    ],
-    opportunities: [
-      {
-        name: "Major League Hacking Hackathons",
-        link: "https://mlh.io",
-        difficulty: "Beginner-friendly",
-        description: "Hands-on real project exposure."
-      }
-    ]
-  };
-
-  if (!type || !DATABASE[type]) {
+  if (!type || !RECOMMENDATIONS_DB[type]) {
     return res.status(400).json({ error: "Invalid type parameter." });
   }
 
   res.json({
     type,
-    items: DATABASE[type]
+    items: RECOMMENDATIONS_DB[type]
   });
 });
 
-
-app.get('/', (req, res) => {
+app.get('/', (_req, res) => {
   res.send('CareerLift AI backend is running.');
 });
+
+// ======================== COURSE MANAGEMENT ========================
+
+// In-memory database
+let courses = [];
+let nextCourseId = 1;
+
+// CREATE COURSE
+app.post("/api/courses", (req, res) => {
+    const { title, category, level, description, url, createdBy } = req.body;
+
+    if (!title || !category || !level) {
+        return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const newCourse = {
+        id: nextCourseId++,
+        title,
+        category,
+        level,
+        description,
+        url,
+        createdBy,
+        createdAt: new Date().toISOString()
+    };
+
+    courses.push(newCourse);
+    res.json({ message: "Course created successfully", course: newCourse });
+});
+
+// GET ALL COURSES
+app.get("/api/courses", (req, res) => {
+    res.json(courses);
+});
+
+// UPDATE COURSE
+app.put("/api/courses/:id", (req, res) => {
+    const id = parseInt(req.params.id);
+    const course = courses.find((c) => c.id === id);
+
+    if (!course) {
+        return res.status(404).json({ error: "Course not found" });
+    }
+
+    const { title, category, level, description, url } = req.body;
+
+    if (title) course.title = title;
+    if (category) course.category = category;
+    if (level) course.level = level;
+    if (description) course.description = description;
+    if (url) course.url = url;
+
+    res.json({ message: "Course updated successfully", course });
+});
+
+// DELETE COURSE
+app.delete("/api/courses/:id", (req, res) => {
+    const id = parseInt(req.params.id);
+
+    const exists = courses.some((c) => c.id === id);
+    if (!exists) {
+        return res.status(404).json({ error: "Course not found" });
+    }
+
+    courses = courses.filter((c) => c.id !== id);
+    res.json({ message: "Course deleted successfully", id });
+});
+
 
 app.listen(PORT, () => {
   console.log(`CareerLift AI backend listening on port ${PORT}`);
