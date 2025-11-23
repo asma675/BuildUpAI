@@ -116,6 +116,7 @@ const useAnalysisData = (db, userId, isAuthReady) => {
 
   useEffect(() => {
     if (!db || !userId || !isAuthReady) {
+      setIsLoading(false);
       return;
     }
 
@@ -148,69 +149,28 @@ const useAnalysisData = (db, userId, isAuthReady) => {
 // --- Gemini API Call and Persistence Logic ---
 
 const analyzeResumeWithGemini = async (db, userId, resumeText, careerGoal) => {
-  const apiKey = ""; // API key is provided by the runtime environment
-  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-
-  const systemPrompt = `You are a world-class AI Career Coach named CareerLift AI. Your task is to analyze a student's resume against their specified career goal. You must generate a score (out of 100), identify 3 crucial missing skills, and suggest 3 real-world opportunities and 3 certifications, all based on current industry standards and the user's career goal. Use Google Search to ensure your advice is grounded in current, relevant data. Respond ONLY with a valid JSON object matching the provided schema.`;
-  
-  const userQuery = `Analyze the following resume content for the career goal: "${careerGoal}". Resume content: "${resumeText.substring(0, 5000)}".`; // Truncate to prevent hitting token limits on large pastes.
-
-  const payload = {
-    contents: [{ parts: [{ text: userQuery }] }],
-    tools: [{ "google_search": {} }],
-    systemInstruction: { parts: [{ text: systemPrompt }] },
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: ANALYSIS_SCHEMA,
-    }
-  };
-
   const maxRetries = 5;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const response = await fetch(apiUrl, {
+      const response = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ resumeText, careerGoal })
       });
 
       if (!response.ok) {
         throw new Error(`API call failed with status: ${response.status}`);
       }
 
-      const result = await response.json();
-      const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+      const analysisWithMetadata = await response.json();
 
-      if (!text) {
-        throw new Error("Gemini response was empty or malformed.");
-      }
-
-      const analysisResult = JSON.parse(text);
-
-      // Extract grounding sources
-      let sources = [];
-      const groundingMetadata = result.candidates?.[0]?.groundingMetadata;
-      if (groundingMetadata && groundingMetadata.groundingAttributions) {
-        sources = groundingMetadata.groundingAttributions
-          .map(attr => ({ uri: attr.web?.uri, title: attr.web?.title }))
-          .filter(source => source.uri && source.title);
-      }
-
-      const analysisWithMetadata = {
-        ...analysisResult,
-        timestamp: new Date().toISOString(),
-        careerGoal,
-        sources,
-      };
-
-      // 4. Persist result to Firestore
-      if (db) {
+      // Persist result to Firestore (best effort)
+      if (db && userId) {
         const docRef = doc(collection(db, `/artifacts/${appId}/users/${userId}/career_analyses`));
         await setDoc(docRef, analysisWithMetadata);
       }
 
       return analysisWithMetadata;
-
     } catch (error) {
       if (attempt < maxRetries - 1) {
         const delay = Math.pow(2, attempt) * 1000;
@@ -220,6 +180,32 @@ const analyzeResumeWithGemini = async (db, userId, resumeText, careerGoal) => {
       }
     }
   }
+};
+
+// Upload resume file to backend for text extraction (and optional inline analysis)
+const uploadResumeFile = async (file, careerGoal) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (careerGoal) {
+    formData.append('careerGoal', careerGoal);
+  }
+
+  const response = await fetch('/api/upload-resume', {
+    method: 'POST',
+    body: formData
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Upload failed (${response.status}): ${message}`);
+  }
+
+  const result = await response.json();
+  if (!result.extractedText) {
+    throw new Error('Resume text was empty in the upload response.');
+  }
+
+  return result;
 };
 
 // Fetch live courses/opportunities from backend (/api/courses)
@@ -282,6 +268,10 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
   const [careerGoal, setCareerGoal] = useState(storedGoal || 'Software Engineer');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState(null);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState(null);
+  const [analysisStatus, setAnalysisStatus] = useState('');
 
   useEffect(() => {
     // Persist form state immediately on change
@@ -310,10 +300,13 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
     }
     setError(null);
     setIsAnalyzing(true);
-    
+    setAnalysisStatus('Sending resume to backend...');
+
     try {
+      setAnalysisStatus('Waiting for Gemini analysis...');
       const result = await analyzeResumeWithGemini(db, userId, resumeText, careerGoal);
       setAnalysisData(result);
+      setAnalysisStatus('Analysis complete.');
 
       // keep the form state but it's safe to clear if you prefer:
       // localStorage.removeItem('upload_resumeText');
@@ -325,6 +318,25 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
       setError(`Analysis failed. Please try again. Error: ${e.message}`);
     } finally {
       setIsAnalyzing(false);
+      setAnalysisStatus('');
+    }
+  };
+
+  const handleUploadFile = async () => {
+    if (!selectedFile) {
+      setUploadError('Please choose a file first.');
+      return;
+    }
+    setUploadError(null);
+    setIsUploading(true);
+    try {
+      const { extractedText } = await uploadResumeFile(selectedFile, careerGoal);
+      setResumeText(extractedText);
+      setError(null);
+    } catch (e) {
+      setUploadError(e.message);
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -334,7 +346,44 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Input Card */}
         <IconCard icon={UploadCloud} title="Resume Content" className="lg:col-span-1">
-          <p className="text-sm text-gray-500 mb-2">Paste your resume text here (PDF upload simulated).</p>
+          <p className="text-sm text-gray-500 mb-2">Paste your resume text here or upload a file to extract text.</p>
+          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:space-x-3 space-y-2 sm:space-y-0 mb-3">
+            <input
+              type="file"
+              accept=".pdf,.doc,.docx,.txt"
+              className="text-sm text-gray-700 flex-1 min-w-0"
+              onChange={(e) => {
+                setSelectedFile(e.target.files?.[0] || null);
+                setUploadError(null);
+              }}
+              disabled={isAnalyzing || isUploading}
+            />
+            <button
+              type="button"
+              onClick={handleUploadFile}
+              className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-3 py-2 rounded-lg shadow disabled:opacity-60 flex items-center justify-center"
+              disabled={!selectedFile || isUploading || isAnalyzing}
+            >
+              {isUploading ? (
+                <>
+                  <Loader className="w-4 h-4 mr-2 animate-spin" />
+                  Extracting...
+                </>
+              ) : (
+                'Extract text'
+              )}
+            </button>
+          </div>
+          {selectedFile?.name && (
+            <div className="text-xs text-gray-500 truncate max-w-full mb-2" title={selectedFile.name}>
+              Selected file: {selectedFile.name}
+            </div>
+          )}
+          {uploadError && (
+            <div className="p-2 mb-3 text-red-700 bg-red-100 border border-red-200 rounded-lg text-xs font-medium">
+              {uploadError}
+            </div>
+          )}
           <textarea
             className="w-full h-64 p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 font-mono text-sm shadow-inner"
             placeholder="Start by pasting your full resume content (experience, education, skills, projects)..."
@@ -374,10 +423,18 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
                 {error}
               </div>
             )}
+            {isAnalyzing && (
+              <div className="mb-3">
+                <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                  <div className="h-full bg-green-500 animate-pulse" style={{ width: '100%' }}></div>
+                </div>
+                <p className="text-xs text-gray-600 mt-2">{analysisStatus || 'Analyzing...'}</p>
+              </div>
+            )}
             <button
               onClick={handleAnalyze}
               className="bg-green-600 hover:bg-green-700 transition-colors text-white font-bold px-6 py-3 rounded-xl w-full shadow-md disabled:opacity-50 flex items-center justify-center transform hover:scale-[1.01]"
-              disabled={isAnalyzing || resumeText.length < 50}
+              disabled={isAnalyzing || isUploading || resumeText.length < 50}
             >
               {isAnalyzing ? (
                 <>

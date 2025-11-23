@@ -28,6 +28,28 @@ if (!GEMINI_API_KEY) {
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
+const mapStaticRecommendationsToLearning = () => ({
+  courses: (RECOMMENDATIONS_DB.certifications || []).map((c) => ({
+    title: c.name,
+    provider: c.provider || 'Static Catalog',
+    link: c.link,
+    cost: c.cost,
+    duration: c.length,
+    level: ''
+  })),
+  opportunities: (RECOMMENDATIONS_DB.opportunities || []).map((o) => ({
+    name: o.name,
+    description: o.description,
+    link: o.link,
+    difficulty: o.difficulty
+  }))
+});
+
+const logError = (context, error) => {
+  const details = error?.response?.data || error.message || error;
+  console.error(`[${context}] error:`, details);
+};
+
 // --- Middleware ---
 
 app.use(cors());
@@ -62,10 +84,12 @@ app.post('/api/analyze', async (req, res) => {
       return res.status(400).json({ error: 'resumeText and careerGoal are required.' });
     }
 
+    console.log(`[analyze] careerGoal="${careerGoal}" textLength=${resumeText.length}`);
     const analysisWithMetadata = await geminiClient.generateStructuredAnalysis(resumeText, careerGoal);
+    console.log(`[analyze] success careerGoal="${careerGoal}" score=${analysisWithMetadata.resumeScore}`);
     return res.json(analysisWithMetadata);
   } catch (error) {
-    console.error('Error in /api/analyze:', error?.response?.data || error.message || error);
+    logError('analyze', error);
     return res.status(500).json({
       error: 'Failed to analyze resume with Gemini.',
       details: error?.response?.data || error.message
@@ -83,20 +107,23 @@ app.post('/api/upload-resume', upload.single('file'), async (req, res) => {
     const { careerGoal } = req.body || {};
     filePath = req.file.path;
 
+    console.log(`[upload-resume] file=${req.file.originalname} size=${req.file.size} careerGoal="${careerGoal || ''}"`);
     const text = await geminiClient.extractTextFromFile(req.file);
 
     let analysis = null;
     if (careerGoal) {
+      console.log(`[upload-resume] running analysis for careerGoal="${careerGoal}"`);
       analysis = await geminiClient.generateStructuredAnalysis(text, careerGoal);
     }
 
+    console.log(`[upload-resume] success file=${req.file.originalname} chars=${text.length}`);
     return res.json({
       extractedText: text,
       characterCount: text.length,
       analysis
     });
   } catch (error) {
-    console.error('Upload error:', error?.response?.data || error.message || error);
+    logError('upload-resume', error);
     return res.status(500).json({
       error: "Failed to process uploaded resume.",
       details: error?.response?.data || error.message
@@ -116,9 +143,11 @@ app.post('/api/courses', async (req, res) => {
 
     const skillsText = Array.isArray(skills) ? skills.join(', ') : (skills || '');
 
+    console.log(`[courses] role="${role}" skills="${skillsText}"`);
     const discovery = await geminiClient.discoverLearningResources(role, skillsText);
     const structured = await geminiClient.structureLearningResources(discovery.text);
 
+    console.log(`[courses] success role="${role}" courses=${structured.courses?.length || 0} opportunities=${structured.opportunities?.length || 0}`);
     return res.json({
       role,
       skills: skillsText,
@@ -127,10 +156,17 @@ app.post('/api/courses', async (req, res) => {
       sources: discovery.sources || []
     });
   } catch (error) {
-    console.error('Error in /api/courses:', error?.response?.data || error.message || error);
-    return res.status(500).json({
-      error: 'Failed to fetch courses/opportunities.',
-      details: error?.response?.data || error.message
+    logError('courses', error);
+    const fallback = mapStaticRecommendationsToLearning();
+    console.log(`[courses] fallback served courses=${fallback.courses.length} opportunities=${fallback.opportunities.length}`);
+    return res.status(200).json({
+      role: req.body?.role,
+      skills: Array.isArray(req.body?.skills) ? req.body.skills.join(', ') : (req.body?.skills || ''),
+      courses: fallback.courses,
+      opportunities: fallback.opportunities,
+      sources: [],
+      fallback: true,
+      message: 'Live lookup failed; returning static catalog.'
     });
   }
 });
