@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Loader, Search, UploadCloud, Zap } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import IconCard from "../components/IconCard";
 import {
   analyzeResumeWithGemini,
@@ -11,7 +12,8 @@ import {
  * - extra roles for Scotiabank & Dayforce
  * - “Other (custom)” option + text box
  */
-const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
+const UploadPage = ({ setAnalysisData, db, userId }) => {
+  const navigate = useNavigate();
   const storedResume =
     typeof window !== "undefined"
       ? localStorage.getItem("upload_resumeText")
@@ -93,7 +95,7 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
       );
       setAnalysisData(result);
       setAnalysisStatus("Analysis complete.");
-      setCurrentPage("dashboard");
+      navigate("/dashboard");
     } catch (e) {
       console.error(e);
       setError(`Analysis failed. Please try again. Error: ${e.message}`);

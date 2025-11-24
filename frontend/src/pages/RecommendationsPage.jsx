@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { Award, Loader, Search, Zap } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import IconCard from "../components/IconCard";
 import { fetchLearningResources } from "../services/api";
 
-const RecommendationsPage = ({ analysisData, setCurrentPage }) => {
+const RecommendationsPage = ({ analysisData }) => {
+  const navigate = useNavigate();
   const [learning, setLearning] = useState(null);
   const [isFetchingCourses, setIsFetchingCourses] = useState(false);
   const [courseError, setCourseError] = useState(null);
@@ -15,7 +17,7 @@ const RecommendationsPage = ({ analysisData, setCurrentPage }) => {
           Analysis data is missing.
         </p>
         <button
-          onClick={() => setCurrentPage("upload")}
+          onClick={() => navigate("/upload")}
           className="bg-gradient-to-r from-cyan-400 to-purple-500 px-5 py-2 rounded-full text-white shadow-glow"
         >
           Go to Upload Page

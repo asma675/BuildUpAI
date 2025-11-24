@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { Award, Loader, PieChart, Search } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import IconCard from "../components/IconCard";
 import { fetchJobMatches } from "../services/api";
 
-const JobMatchPage = ({ analysisData, setCurrentPage }) => {
+const JobMatchPage = ({ analysisData }) => {
+  const navigate = useNavigate();
   const [jobs, setJobs] = useState([]);
   const [location, setLocation] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -42,7 +44,7 @@ const JobMatchPage = ({ analysisData, setCurrentPage }) => {
       <div className="p-8 max-w-2xl mx-auto text-center">
         <p className="text-lg text-red-500 mb-4">Analysis data is missing.</p>
         <button
-          onClick={() => setCurrentPage("upload")}
+          onClick={() => navigate("/upload")}
           className="inline-block bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 text-white font-bold px-6 py-3 rounded-full shadow-glow"
         >
           Go to Upload Page
@@ -63,7 +65,7 @@ const JobMatchPage = ({ analysisData, setCurrentPage }) => {
           </p>
         </div>
         <button
-          onClick={() => setCurrentPage("recommendations")}
+          onClick={() => navigate("/recommendations")}
           className="text-sm text-cyan-200 hover:text-white underline"
         >
           Back to Plan

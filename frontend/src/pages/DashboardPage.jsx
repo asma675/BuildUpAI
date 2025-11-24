@@ -1,12 +1,10 @@
 import { Award, Loader, PieChart, Search, Zap } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import IconCard from "../components/IconCard";
 
-const DashboardPage = ({
-  setCurrentPage,
-  analysisData,
-  isAuthReady,
-  isLoading,
-}) => {
+const DashboardPage = ({ analysisData, isAuthReady, isLoading }) => {
+  const navigate = useNavigate();
+
   if (!isAuthReady || isLoading) {
     return (
       <div className="p-8 text-center">
@@ -26,7 +24,7 @@ const DashboardPage = ({
           It looks like you haven't completed an analysis yet.
         </p>
         <button
-          onClick={() => setCurrentPage("upload")}
+          onClick={() => navigate("/upload")}
           className="inline-block bg-gradient-to-r from-cyan-400 to-purple-500 hover:from-cyan-300 hover:to-purple-400 transition-transform text-white font-bold px-6 py-3 rounded-full shadow-glow"
         >
           Start a New Analysis
@@ -101,7 +99,7 @@ const DashboardPage = ({
             leveling up your profile today.
           </p>
           <button
-            onClick={() => setCurrentPage("recommendations")}
+            onClick={() => navigate("/recommendations")}
             className="bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 hover:from-cyan-300 hover:via-blue-400 hover:to-purple-400 transition-transform text-white font-bold px-6 py-3 rounded-2xl w-full shadow-glow transform hover:scale-[1.02]"
           >
             View Personalized Recommendations →
