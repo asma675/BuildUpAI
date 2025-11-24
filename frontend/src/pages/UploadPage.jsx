@@ -2,10 +2,8 @@ import { useEffect, useState } from "react";
 import { Loader, Search, UploadCloud, Zap } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import IconCard from "../components/IconCard";
-import {
-  analyzeResumeWithGemini,
-  uploadResumeFile,
-} from "../services/api";
+import { analyzeResumeWithGemini, uploadResumeFile } from "../services/api";
+import "./UploadPage.scss";
 
 /**
  * UploadPage with:
@@ -124,26 +122,20 @@ const UploadPage = ({ setAnalysisData, db, userId }) => {
   };
 
   return (
-    <div className="p-4 md:p-8 max-w-4xl mx-auto">
-      <h2 className="text-3xl md:text-4xl font-extrabold text-white mb-2 drop-shadow-[0_0_18px_rgba(59,130,246,0.8)]">
-        Analyze Your Career Path
-      </h2>
-      <p className="text-sm md:text-base text-purple-100 mb-6 opacity-90">
-        Upload your resume or paste the content, choose a target role, and let
-        CareerLift generate a tailored action plan.
+    <div className="upload-page">
+      <h2 className="section-title">Analyze Your Career Path</h2>
+      <p className="section-subtitle">
+        Upload your resume or paste the content, choose a target role, and let CareerLift generate a tailored action plan.
       </p>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Input Card */}
-        <IconCard icon={UploadCloud} title="Resume Content" className="lg:col-span-1">
-          <p className="text-sm text-purple-100 mb-2">
-            Paste your resume text here or upload a file to extract text.
-          </p>
-          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:space-x-3 space-y-2 sm:space-y-0 mb-3">
+      <div className="upload-grid">
+        <IconCard icon={UploadCloud} title="Resume Content" className="upload-card">
+          <p className="muted">Paste your resume text here or upload a file to extract text.</p>
+          <div className="upload-actions">
             <input
               type="file"
               accept=".pdf,.doc,.docx,.txt"
-              className="text-sm text-purple-100 flex-1 min-w-0"
+              className="file-input"
               onChange={(e) => {
                 setSelectedFile(e.target.files?.[0] || null);
                 setUploadError(null);
@@ -153,12 +145,12 @@ const UploadPage = ({ setAnalysisData, db, userId }) => {
             <button
               type="button"
               onClick={handleUploadFile}
-              className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:from-blue-400 hover:to-cyan-300 text-white text-sm font-semibold px-3 py-2 rounded-lg shadow-glow disabled:opacity-60 flex items-center justify-center"
+              className="btn btn-secondary shadow-glow"
               disabled={!selectedFile || isUploading || isAnalyzing}
             >
               {isUploading ? (
                 <>
-                  <Loader className="w-4 h-4 mr-2 animate-spin" />
+                  <Loader className="icon-sm" />
                   Extracting...
                 </>
               ) : (
@@ -167,20 +159,13 @@ const UploadPage = ({ setAnalysisData, db, userId }) => {
             </button>
           </div>
           {selectedFile?.name && (
-            <div
-              className="text-xs text-purple-100 truncate max-w-full mb-2"
-              title={selectedFile.name}
-            >
+            <div className="file-name" title={selectedFile.name}>
               Selected file: {selectedFile.name}
             </div>
           )}
-          {uploadError && (
-            <div className="p-2 mb-3 text-red-300 bg-red-900/40 border border-red-500/60 rounded-lg text-xs font-medium">
-              {uploadError}
-            </div>
-          )}
+          {uploadError && <div className="alert alert-error">{uploadError}</div>}
           <textarea
-            className="w-full h-64 p-3 border border-purple-500/60 bg-purple-950/70 rounded-xl focus:ring-2 focus:ring-cyan-400 focus:border-cyan-400 font-mono text-sm shadow-inner text-purple-50 placeholder-purple-300/70"
+            className="textarea resume-input"
             placeholder="Start by pasting your full resume content (experience, education, skills, projects)..."
             value={resumeText}
             onChange={(e) => {
@@ -191,22 +176,14 @@ const UploadPage = ({ setAnalysisData, db, userId }) => {
           />
         </IconCard>
 
-        {/* Goal and Action Card */}
-        <IconCard
-          icon={Search}
-          title="Career Goal & Action"
-          className="lg:col-span-1 flex flex-col justify-between"
-        >
-          <div className="flex-grow">
-            <label
-              htmlFor="career-goal"
-              className="block text-md font-medium text-purple-50 mb-2"
-            >
+        <IconCard icon={Search} title="Career Goal & Action" className="upload-card">
+          <div className="goal-block">
+            <label htmlFor="career-goal" className="field-label">
               Target Career Goal
             </label>
             <select
               id="career-goal"
-              className="border border-purple-500/60 bg-purple-950/70 p-3 w-full rounded-xl shadow-sm focus:ring-2 focus:ring-cyan-400 focus:border-cyan-400 text-purple-50"
+              className="select"
               value={careerGoal}
               onChange={(e) => setCareerGoal(e.target.value)}
               disabled={isAnalyzing}
@@ -219,17 +196,14 @@ const UploadPage = ({ setAnalysisData, db, userId }) => {
             </select>
 
             {careerGoal === "Other (custom)" && (
-              <div className="mt-4">
-                <label
-                  htmlFor="custom-career-goal"
-                  className="block text-sm font-medium text-purple-50 mb-1"
-                >
+              <div className="custom-goal">
+                <label htmlFor="custom-career-goal" className="field-label">
                   Enter your own career goal
                 </label>
                 <input
                   id="custom-career-goal"
                   type="text"
-                  className="w-full p-3 rounded-xl border border-purple-500/60 bg-purple-950/70 text-purple-50 placeholder-purple-300/70 focus:ring-2 focus:ring-cyan-400 focus:border-cyan-400"
+                  className="input"
                   placeholder="e.g., AI Product Manager at Google"
                   value={customCareerGoal}
                   onChange={(e) => {
@@ -241,45 +215,33 @@ const UploadPage = ({ setAnalysisData, db, userId }) => {
               </div>
             )}
 
-            <p className="text-sm text-purple-100 mt-4">
-              The AI will benchmark your skills against this specific industry
-              role.
+            <p className="muted small">
+              The AI will benchmark your skills against this specific industry role.
             </p>
           </div>
 
-          <div className="mt-8 pt-4 border-t border-purple-500/40">
-            {error && (
-              <div className="p-3 mb-4 text-red-200 bg-red-900/40 border border-red-500/70 rounded-lg text-sm font-medium">
-                {error}
-              </div>
-            )}
+          <div className="goal-actions">
+            {error && <div className="alert alert-error">{error}</div>}
             {isAnalyzing && (
-              <div className="mb-3">
-                <div className="h-2 bg-purple-950/60 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-cyan-400 to-blue-500 animate-pulse"
-                    style={{ width: "100%" }}
-                  ></div>
-                </div>
-                <p className="text-xs text-purple-100 mt-2">
-                  {analysisStatus || "Analyzing..."}
-                </p>
+              <div className="progress">
+                <div className="progress__bar" />
+                <p className="progress__text">{analysisStatus || "Analyzing..."}</p>
               </div>
             )}
             <button
               onClick={handleAnalyze}
-              className="bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 hover:from-cyan-300 hover:via-blue-400 hover:to-purple-400 transition-transform text-white font-bold px-6 py-3 rounded-2xl w-full shadow-glow disabled:opacity-50 flex items-center justify-center transform hover:scale-[1.02]"
+              className="btn btn-primary shadow-glow analyze-btn"
               disabled={isAnalyzing || isUploading || resumeText.length < 50}
             >
               {isAnalyzing ? (
                 <>
-                  <Loader className="w-5 h-5 mr-3 animate-spin" />
+                  <Loader className="icon-md" />
                   Analyzing with Gemini...
                 </>
               ) : (
                 <>
-                  <Zap className="w-5 h-5 mr-2" />
-                  Analyze & Get Personalized Plan
+                  <Zap className="icon-md" />
+                  Analyze &amp; Get Personalized Plan
                 </>
               )}
             </button>
