@@ -1,0 +1,5 @@
+Copyright (c) 2025 Asma Ahmed
+All Rights Reserved.
+
+This software may not be copied, modified, distributed, or used
+without explicit written permission from the copyright owner.
